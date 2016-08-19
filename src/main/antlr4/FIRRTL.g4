@@ -118,6 +118,7 @@ stmt
   | when
   | 'stop(' exp exp IntLit ')' info?
   | 'printf(' exp exp StringLit ( exp)* ')' info?
+  | 'vinline(' StringLit (exp)* ')' info?
   | 'skip' info?
   ;
 
@@ -222,6 +223,7 @@ keyword
   | 'else'
   | 'stop'
   | 'printf'
+  | 'vinline'
   | 'skip'
   | 'old'
   | 'new'

@@ -73,9 +73,10 @@ object ExpandWhens extends Pass {
   }
   private def expandNetlist(netlist: LinkedHashMap[WrappedExpression, Expression]) =
     netlist map { case (k, v) =>
-      v match {
-        case WInvalid() => IsInvalid(NoInfo, k.e1)
-        case _ => Connect(NoInfo, k.e1, v)
+      val (e, info) = extractInfo(v)
+      e match {
+        case WInvalid() => IsInvalid(info, k.e1)
+        case expr => Connect(info, k.e1, expr)
       }
     }
   // Searches nested scopes of defaults for lvalue
@@ -99,48 +100,56 @@ object ExpandWhens extends Pass {
       def expandWhens(
           netlist: LinkedHashMap[WrappedExpression, Expression],
           defaults: Seq[collection.mutable.Map[WrappedExpression, Expression]],
-          p: Expression)
+          p: Expression,
+          winfo: Info)
           (s: Statement): Statement = {
         s match {
           case w: DefWire =>
             getFemaleRefs(w.name, w.tpe, BIGENDER) foreach (ref => netlist(ref) = WVoid())
             w
-          case r: DefRegister =>
-            getFemaleRefs(r.name, r.tpe, BIGENDER) foreach (ref => netlist(ref) = ref)
-            r
-          case c: Connect =>
-            netlist(c.loc) = c.expr
+          case reg: DefRegister =>
+            for (ref <- getFemaleRefs(reg.name, reg.tpe, BIGENDER)) {
+              netlist(ref) = ExprWithInfo(ref, reg.info)
+            }
+            reg
+          case Connect(info, loc, expr) =>
+            netlist(loc) = ExprWithInfo(expr, info)
             EmptyStmt
-          case c: IsInvalid =>
-            netlist(c.expr) = WInvalid()
+          case IsInvalid(info, expr) =>
+            netlist(expr) = ExprWithInfo(WInvalid(), info)
             EmptyStmt
           case s: Conditionally =>
             val memos = ArrayBuffer[Statement]()
 
             val conseqNetlist = LinkedHashMap[WrappedExpression, Expression]()
             val altNetlist = LinkedHashMap[WrappedExpression, Expression]()
-            val conseqStmt = expandWhens(conseqNetlist, netlist +: defaults, AND(p, s.pred))(s.conseq)
-            val altStmt = expandWhens(altNetlist, netlist +: defaults, AND(p, NOT(s.pred)))(s.alt)
+            val conseqStmt = expandWhens(conseqNetlist, netlist +: defaults, AND(p, s.pred), s.info)(s.conseq)
+            val altStmt = expandWhens(altNetlist, netlist +: defaults, AND(p, NOT(s.pred)), s.info)(s.alt)
 
             (conseqNetlist.keySet ++ altNetlist.keySet) foreach { lvalue =>
               // Defaults in netlist get priority over those in defaults
               val default = if (netlist.contains(lvalue)) netlist.get(lvalue) else getDefault(lvalue, defaults)
-              val res = default match {
+              val (res, rinfo) = default match {
                 case Some(defaultValue) =>
-                  val trueValue = conseqNetlist.getOrElse(lvalue, defaultValue)
-                  val falseValue = altNetlist.getOrElse(lvalue, defaultValue)
+                  val (trueValue, trueInfo) =
+                    extractInfo(conseqNetlist getOrElse(lvalue, defaultValue))
+                  val (falseValue, falseInfo) =
+                    extractInfo(altNetlist.getOrElse(lvalue, defaultValue))
+                  val info = MultiInfo(Seq(s.info, trueInfo, falseInfo))
                   (trueValue, falseValue) match {
-                    case (WInvalid(), WInvalid()) => WInvalid()
-                    case (WInvalid(), fv) => ValidIf(NOT(s.pred), fv, tpe(fv))
-                    case (tv, WInvalid()) => ValidIf(s.pred, tv, tpe(tv))
-                    case (tv, fv) => Mux(s.pred, tv, fv, mux_type_and_widths(tv, fv))
+                    case (WInvalid(), WInvalid()) => (WInvalid(), info)
+                    case (WInvalid(), fv) => (ValidIf(NOT(s.pred), fv, fv.tpe), info)
+                    case (tv, WInvalid()) => (ValidIf(s.pred, tv, tv.tpe), info)
+                    case (tv, fv) =>
+                      val expr = Mux(s.pred, tv, fv, mux_type_and_widths(tv, fv))
+                      (expr, info)
                   }
                 case None =>
                   // Since not in netlist, lvalue must be declared in EXACTLY one of conseq or alt
-                  conseqNetlist.getOrElse(lvalue, altNetlist(lvalue))
+                  extractInfo(conseqNetlist getOrElse (lvalue, altNetlist(lvalue)))
               }
 
-              val memoNode = DefNode(s.info, namespace.newTemp, res)
+              val memoNode = DefNode(rinfo, namespace.newTemp, res)
               val memoExpr = WRef(memoNode.name, res.tpe, NodeKind(), MALE)
               memos += memoNode
               netlist(lvalue) = memoExpr
@@ -161,7 +170,7 @@ object ExpandWhens extends Pass {
               simlist += Stop(s.info, s.ret, s.clk, AND(p, s.en))
             }
             EmptyStmt
-          case s => s map expandWhens(netlist, defaults, p)
+          case s => s map expandWhens(netlist, defaults, p, winfo)
         }
       }
       val netlist = LinkedHashMap[WrappedExpression, Expression]()
@@ -170,7 +179,7 @@ object ExpandWhens extends Pass {
       m.ports foreach { port =>
         getFemaleRefs(port.name, port.tpe, to_gender(port.direction)) foreach (ref => netlist(ref) = WVoid())
       }
-      val bodyx = expandWhens(netlist, Seq(netlist), one)(m.body)
+      val bodyx = expandWhens(netlist, Seq(netlist), one, NoInfo)(m.body)
 
       (netlist, simlist, bodyx)
     }
@@ -179,7 +188,7 @@ object ExpandWhens extends Pass {
         case m: ExtModule => m
         case m: Module =>
         val (netlist, simlist, bodyx) = expandWhens(m)
-        val newBody = Block(Seq(squashEmpty(bodyx)) ++ expandNetlist(netlist) ++ simlist)
+        val newBody = Block(Seq(bodyx map squashEmpty) ++ expandNetlist(netlist) ++ simlist)
         Module(m.info, m.name, m.ports, newBody)
       }
     }

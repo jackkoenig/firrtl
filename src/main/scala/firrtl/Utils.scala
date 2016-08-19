@@ -82,6 +82,20 @@ object Utils extends LazyLogging {
     if (bi < BigInt(0)) "\"h" + bi.toString(16).substring(1) + "\""
     else "\"h" + bi.toString(16) + "\""
 
+  // Utilities for keeping Source info around when converting from Connect
+  // to Map[WrappedExpression, Expression] as done in ExpandWhens and
+  // VerilogEmitter
+  private[firrtl] case class ExprWithInfo(expr: Expression, info: Info) extends Expression {
+    def tpe = expr.tpe
+    def serialize: String = expr.serialize
+    def map(f: Expression => Expression) = ExprWithInfo(f(expr), info)
+  }
+  private[firrtl] def extractInfo(expr: Expression): (Expression, Info) =
+    expr match {
+      case ExprWithInfo(e, info) => (e, info)
+      case e => (e, NoInfo)
+    }
+
    implicit class WithAs[T](x: T) {
      import scala.reflect._
      def as[O: ClassTag]: Option[O] = x match {

@@ -56,6 +56,12 @@ trait StringLitHandler {
     escape(lit.array, "")
   }
 
+  // Apply correct escaping for strings that should be inlined into result
+  // Since % is the format specifier, literal % is escaped as %%. We have to
+  // undo that escaping.
+  def escapeInline(lit: StringLit): String =
+    new String(lit.array, UTF_8) replaceAllLiterally("%%", "%")
+
   // Turn raw parsed strings into String Literals
   def unescape(raw: String): StringLit = {
     @tailrec

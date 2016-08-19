@@ -45,6 +45,17 @@ case object NoInfo extends Info {
 case class FileInfo(info: StringLit) extends Info {
   override def toString: String = " @[" + info.serialize + "]"
 }
+case class MultiInfo(elts: Seq[Info]) extends Info {
+  override def toString(): String = {
+    def getLits(info: Info): Seq[StringLit] = info match {
+      case NoInfo => Seq()
+      case FileInfo(lit) => Seq(lit)
+      case MultiInfo(lits) => lits flatMap getLits
+    }
+    val str = (getLits(this) map (_.serialize) mkString ", ")
+    if (str.isEmpty) "" else " @[" + str + "]"
+  }
+}
 
 trait HasName {
   val name: String
@@ -186,6 +197,15 @@ case class Print(
     val strs = Seq(clk.serialize, en.serialize, ("\"" + string.serialize + "\"")) ++
                (args map (_.serialize))
     "printf(" + (strs mkString ", ") + ")" + info.serialize
+  }
+}
+case class InlineVerilog(
+    info: Info,
+    string: StringLit,
+    args: Seq[Expression]) extends Statement with HasInfo {
+  def serialize: String = {
+    val strs = ("\"" + string.serialize + "\"") +: (args map (_.serialize))
+    "vinline(" + (strs mkString ", ") + ")" + info.serialize
   }
 }
 case object EmptyStmt extends Statement {

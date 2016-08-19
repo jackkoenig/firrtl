@@ -58,6 +58,7 @@ object Mappers {
           case s: Stop => Stop(s.info, s.ret, f(s.clk), f(s.en))
           case s: Print => Print(s.info, s.string, s.args.map(f), f(s.clk), f(s.en))
           case s: CDefMPort => CDefMPort(s.info,s.name,s.tpe,s.mem,s.exps.map(f),s.direction)
+          case s: InlineVerilog => s.copy(args = s.args map f)
           case s: Statement => s
         }
       }

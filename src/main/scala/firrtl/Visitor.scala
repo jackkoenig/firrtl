@@ -276,6 +276,12 @@ class Visitor(infoMode: InfoMode) extends FIRRTLBaseVisitor[FirrtlNode] {
         case "stop(" => Stop(info, string2Int(ctx.IntLit().getText), visitExp(ctx.exp(0)), visitExp(ctx.exp(1)))
         case "printf(" => Print(info, visitStringLit(ctx.StringLit), ctx.exp.drop(2).map(visitExp),
           visitExp(ctx.exp(0)), visitExp(ctx.exp(1)))
+        case "vinline(" =>
+          InlineVerilog(
+            info,
+            visitStringLit(ctx.StringLit),
+            ctx.exp map (visitExp)
+          )
         case "skip" => EmptyStmt
       }
       // If we don't match on the first child, try the next one

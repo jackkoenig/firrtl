@@ -58,9 +58,12 @@ object CheckHighForm extends Pass with LazyLogging {
   class NegWidthException extends PassException(s"${sinfo}: [module ${mname}] Width cannot be negative or zero.")
   class NegVecSizeException extends PassException(s"${sinfo}: [module ${mname}] Vector type size cannot be negative.")
   class NegMemSizeException extends PassException(s"${sinfo}: [module ${mname}] Memory size cannot be negative or zero.")
-  class BadPrintfException(x: Char) extends PassException(s"${sinfo}: [module ${mname}] Bad printf format: " + "\"%" + x + "\"")
-  class BadPrintfTrailingException extends PassException(s"${sinfo}: [module ${mname}] Bad printf format: trailing " + "\"%\"")
-  class BadPrintfIncorrectNumException extends PassException(s"${sinfo}: [module ${mname}] Bad printf format: incorrect number of arguments")
+  class BadFormatException(x: Char) extends PassException(
+    s"""$sinfo: [module $mname] Bad string format: "%$x"""")
+  class BadFormatTrailingException extends PassException(
+    s"""$sinfo: [module $mname] Bad string format: trailing "%"""")
+  class BadFormatIncorrectNumException extends PassException(
+    s"$sinfo: [module $mname] Bad string format: incorrect number of arguments")
   class InstanceLoop(loop: String) extends PassException(s"${sinfo}: [module ${mname}] Has instance loop $loop")
 
   /**
@@ -170,19 +173,19 @@ object CheckHighForm extends Pass with LazyLogging {
       }
     }
 
-    def checkFstring(s: StringLit, i: Int) = {
-      val validFormats = "bdxc"
+    def checkFormatString(validFormats: String, s: StringLit, i: Int) = {
       var percent = false
       var npercents = 0
       s.array.foreach { b =>
         if (percent) {
           if (validFormats.contains(b)) npercents += 1
-          else if (b != '%') errors.append(new BadPrintfException(b.toChar))
+          else if (b != '%' && b != 'm') // %% and %m is ok.
+            errors.append(new BadFormatException(b.toChar))
         }
         percent = if (b == '%') !percent else false // %% -> percent = false
       }
-      if (percent) errors.append(new BadPrintfTrailingException)
-      if (npercents != i) errors.append(new BadPrintfIncorrectNumException)
+      if (percent) errors.append(new BadFormatTrailingException)
+      if (npercents != i) errors.append(new BadFormatIncorrectNumException)
     }
     def checkValidLoc(e: Expression) = {
       e match {
@@ -262,7 +265,9 @@ object CheckHighForm extends Pass with LazyLogging {
           }
           case s: Connect => checkValidLoc(s.loc)
           case s: PartialConnect => checkValidLoc(s.loc)
-          case s: Print => checkFstring(s.string, s.args.length)
+          case s: Print => checkFormatString("bdx", s.string, s.args.length)
+          case InlineVerilog(_, string, args) =>
+            checkFormatString("I", string, args.length)
           case _ => // Do Nothing
         }
 
@@ -648,6 +653,10 @@ object CheckGenders extends Pass {
                check_gender(s.info,genders,MALE)(s.en)
                check_gender(s.info,genders,MALE)(s.clk)
             }
+            case InlineVerilog(info, _, args) =>
+               for (x <- args) {
+                  check_gender(info, genders, MALE)(x)
+               }
             case (s:PartialConnect) => {
                check_gender(s.info,genders,FEMALE)(s.loc)
                check_gender(s.info,genders,MALE)(s.expr)
