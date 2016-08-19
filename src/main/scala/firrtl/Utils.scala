@@ -167,54 +167,33 @@ object Utils extends LazyLogging {
    }
    def get_flip (t:Type, i:Int, f:Orientation) : Orientation = {
       if (i >= get_size(t)) error("Shouldn't be here")
-      val x = t match {
-         case (t:UIntType) => f
-         case (t:SIntType) => f
-         case ClockType => f
-         case (t:BundleType) => {
-            var n = i
-            var ret:Option[Orientation] = None
-            t.fields.foreach { x => {
-               if (n < get_size(x.tpe)) {
-                  ret match {
-                     case None => ret = Some(get_flip(x.tpe,n,times(x.flip,f)))
-                     case ret => {}
-                  }
-               } else { n = n - get_size(x.tpe) }
-            }}
-            ret.asInstanceOf[Some[Orientation]].get
-         }
-         case (t:VectorType) => {
-            var n = i
-            var ret:Option[Orientation] = None
-            for (j <- 0 until t.size) {
-               if (n < get_size(t.tpe)) {
-                  ret = Some(get_flip(t.tpe,n,f))
-               } else {
-                  n = n - get_size(t.tpe)
-               }
+      t match {
+         case (_:GroundType) => f
+         case (t:BundleType) => ((t.fields foldLeft (i, None: Option[Orientation])){
+            case ((n, ret), x) if n < get_size(x.tpe) => ret match {
+              case None => (n, Some(get_flip(x.tpe,n,times(x.flip,f))))
+              case Some(_) => (n, ret)
             }
-            ret.asInstanceOf[Some[Orientation]].get
-         }
+            case ((n, ret), x) => (n - get_size(x.tpe), ret)
+         })._2.asInstanceOf[Some[Orientation]].get
+         case (t:VectorType) => (((0 until t.size) foldLeft (i, None: Option[Orientation])){
+            case ((n, ret), x) if n < get_size(t.tpe) => ret match {
+              case None => (n, Some(get_flip(t.tpe,n,f)))
+              case Some(_) => (n, ret)
+            }
+            case ((n, ret), x) => (n - get_size(t.tpe), ret)
+         })._2.asInstanceOf[Some[Orientation]].get
       }
-      x
    }
    
-   def get_point (e:Expression) : Int = { 
-      e match {
-         case (e:WRef) => 0
-         case (e:WSubField) => {
-            var i = 0
-            tpe(e.exp).asInstanceOf[BundleType].fields.find { f => {
-               val b = f.name == e.name
-               if (!b) { i = i + get_size(f.tpe)}
-               b
-            }}
-            i
-         }
-         case (e:WSubIndex) => e.value * get_size(e.tpe)
-         case (e:WSubAccess) => get_point(e.exp)
+   def get_point (e:Expression) : Int = e match {
+      case (e:WRef) => 0
+      case (e:WSubField) => tpe(e.exp) match {case b: BundleType =>
+         (b.fields foldLeft 0)((point, f) =>
+            if (f.name != e.name) point + get_size(f.tpe) else point)
       }
+      case (e:WSubIndex) => e.value * get_size(e.tpe)
+      case (e:WSubAccess) => get_point(e.exp)
    }
 
    /** Returns true if t, or any subtype, contains a flipped field
@@ -296,20 +275,14 @@ object Utils extends LazyLogging {
          case t => error("No width!")
       }
    }
-   def long_BANG (t:Type) : Long = {
-      (t) match {
-         case g: GroundType => 
-           g.width match {
-             case IntWidth(x) => x.toLong
-             case _ => throw new FIRRTLException(s"Expecting IntWidth, got: ${g.width}")
-           }
-         case (t:BundleType) => {
-            var w = 0
-            for (f <- t.fields) { w = w + long_BANG(f.tpe).toInt }
-            w
-         }
-         case (t:VectorType) => t.size * long_BANG(t.tpe)
+   def long_BANG (t:Type) : Long = t match {
+      case (g: GroundType) => g.width match {
+         case IntWidth(x) => x.toLong
+         case _ => error(s"Expecting IntWidth, got: ${g.width}")
       }
+      case (t:BundleType) => (t.fields foldLeft 0)((w, f) =>
+        w + long_BANG(f.tpe).toInt)
+      case (t:VectorType) => t.size * long_BANG(t.tpe)
    }
 // =================================
    def error(str:String) = throw new FIRRTLException(str)
@@ -327,18 +300,11 @@ object Utils extends LazyLogging {
    }
 
 //// =============== EXPANSION FUNCTIONS ================
-   def get_size (t:Type) : Int = {
-      t match {
-         case (t:BundleType) => {
-            var sum = 0
-            for (f <- t.fields) {
-               sum = sum + get_size(f.tpe)
-            }
-            sum
-         }
-         case (t:VectorType) => t.size * get_size(t.tpe)
-         case (t) => 1
-      }
+   def get_size (t:Type) : Int = t match {
+      case (t:BundleType) => (t.fields foldLeft 0)(
+        (sum, f) => sum + get_size(f.tpe))
+      case (t:VectorType) => t.size * get_size(t.tpe)
+      case (t) => 1
    }
    def get_valid_points (t1:Type, t2:Type, flip1:Orientation, flip2:Orientation) : Seq[(Int,Int)] = {
       //;println_all(["Inside with t1:" t1 ",t2:" t2 ",f1:" flip1 ",f2:" flip2])
@@ -385,77 +351,55 @@ object Utils extends LazyLogging {
       }
    }
 // =========== GENDER/FLIP UTILS ============
-   def swap (g:Gender) : Gender = {
-      g match {
-         case UNKNOWNGENDER => UNKNOWNGENDER
-         case MALE => FEMALE
-         case FEMALE => MALE
-         case BIGENDER => BIGENDER
-      }
+   def swap (g:Gender) : Gender = g match {
+     case UNKNOWNGENDER => UNKNOWNGENDER
+     case MALE => FEMALE
+     case FEMALE => MALE
+     case BIGENDER => BIGENDER
    }
-   def swap (d:Direction) : Direction = {
-      d match {
-         case Output => Input
-         case Input => Output
-      }
+   def swap (d:Direction) : Direction = d match {
+     case Output => Input
+     case Input => Output
    }
-   def swap (f:Orientation) : Orientation = {
-      f match {
-         case Default => Flip
-         case Flip => Default
-      }
+   def swap (f:Orientation) : Orientation = f match {
+     case Default => Flip
+     case Flip => Default
    }
-   def to_dir (g:Gender) : Direction = {
-      g match {
-         case MALE => Input
-         case FEMALE => Output
-      }
+   def to_dir (g:Gender) : Direction = g match {
+     case MALE => Input
+     case FEMALE => Output
    }
-   def to_gender (d:Direction) : Gender = {
-      d match {
-         case Input => MALE
-         case Output => FEMALE
-      }
+   def to_gender (d:Direction) : Gender = d match {
+     case Input => MALE
+     case Output => FEMALE
    }
-  def toGender(f: Orientation): Gender = f match {
-    case Default => FEMALE
-    case Flip => MALE
-  }
-  def toFlip(g: Gender): Orientation = g match {
-    case MALE => Flip
-    case FEMALE => Default
-  }
+   def toGender(f: Orientation): Gender = f match {
+     case Default => FEMALE
+     case Flip => MALE
+   }
+   def toFlip(g: Gender): Orientation = g match {
+     case MALE => Flip
+     case FEMALE => Default
+   }
 
-   def field_flip (v:Type,s:String) : Orientation = {
-      v match {
-         case v:BundleType => {
-            val ft = v.fields.find {p => p.name == s}
-            ft match {
-               case ft:Some[Field] => ft.get.flip
-               case ft => Default
-            }
-         }
-         case v => Default
-      }
+   def field_flip (v:Type,s:String) : Orientation = v match {
+     case (v:BundleType) => v.fields find (_.name == s) match {
+       case Some(ft) => ft.flip
+       case None => Default
+     }
+     case v => Default
    }
-   def get_field (v:Type,s:String) : Field = {
-      v match {
-         case v:BundleType => {
-            val ft = v.fields.find {p => p.name == s}
-            ft match {
-               case ft:Some[Field] => ft.get
-               case ft => error("Shouldn't be here"); Field("blah",Default,UnknownType)
-            }
-         }
-         case v => error("Shouldn't be here"); Field("blah",Default,UnknownType)
-      }
+   def get_field (v:Type,s:String) : Field = v match {
+     case (v:BundleType) => v.fields find (_.name == s) match {
+       case Some(ft) => ft
+       case None => error("Shouldn't be here")
+     }
+     case v => error("Shouldn't be here")
    }
    def times (flip:Orientation, d:Direction) : Direction = times(flip, d)
-   def times (d:Direction,flip:Orientation) : Direction = {
-      flip match {
-         case Default => d
-         case Flip => swap(d)
-      }
+   def times (d:Direction,flip:Orientation) : Direction = flip match {
+     case Default => d
+     case Flip => swap(d)
    }
    def times (g: Gender, d: Direction): Direction = times(d, g)
    def times (d: Direction, g: Gender): Direction = g match {
@@ -464,153 +408,139 @@ object Utils extends LazyLogging {
    }
 
    def times (g:Gender,flip:Orientation) : Gender = times(flip, g)
-   def times (flip:Orientation, g:Gender) : Gender = {
-      flip match {
-         case Default => g
-         case Flip => swap(g)
-      }
+   def times (flip:Orientation, g:Gender) : Gender = flip match {
+     case Default => g
+     case Flip => swap(g)
    }
-   def times (f1:Orientation, f2:Orientation) : Orientation = {
-      f2 match {
-         case Default => f1
-         case Flip => swap(f1)
-      }
+   def times (f1:Orientation, f2:Orientation) : Orientation = f2 match {
+     case Default => f1
+     case Flip => swap(f1)
    }
 
 
 // =========== ACCESSORS =========
-   def info (s:Statement) : Info = {
-      s match {
-         case s:DefWire => s.info
-         case s:DefRegister => s.info
-         case s:DefInstance => s.info
-         case s:WDefInstance => s.info
-         case s:DefMemory => s.info
-         case s:DefNode => s.info
-         case s:Conditionally => s.info
-         case s:PartialConnect => s.info
-         case s:Connect => s.info
-         case s:IsInvalid => s.info
-         case s:Stop => s.info
-         case s:Print => s.info
-         case s:Block => NoInfo
-         case EmptyStmt => NoInfo
-      }
+   def info (s:Statement) : Info = s match {
+      case s:DefWire => s.info
+      case s:DefRegister => s.info
+      case s:DefInstance => s.info
+      case s:WDefInstance => s.info
+      case s:DefMemory => s.info
+      case s:DefNode => s.info
+      case s:Conditionally => s.info
+      case s:PartialConnect => s.info
+      case s:Connect => s.info
+      case s:IsInvalid => s.info
+      case s:Stop => s.info
+      case s:Print => s.info
+      case s:Block => NoInfo
+      case EmptyStmt => NoInfo
    }
-   def gender (e:Expression) : Gender = {
-     e match {
-        case e:WRef => e.gender
-        case e:WSubField => e.gender
-        case e:WSubIndex => e.gender
-        case e:WSubAccess => e.gender
-        case e:DoPrim => MALE
-        case e:UIntLiteral => MALE
-        case e:SIntLiteral => MALE
-        case e:Mux => MALE
-        case e:ValidIf => MALE
-        case e:WInvalid => MALE
-        case e => println(e); error("Shouldn't be here")
-    }}
-   def get_gender (s:Statement) : Gender =
-     s match {
-       case s:DefWire => BIGENDER
-       case s:DefRegister => BIGENDER
-       case s:WDefInstance => MALE
-       case s:DefNode => MALE
-       case s:DefInstance => MALE
-       case s:DefMemory => MALE
-       case s:Block => UNKNOWNGENDER
-       case s:Connect => UNKNOWNGENDER
-       case s:PartialConnect => UNKNOWNGENDER
-       case s:Stop => UNKNOWNGENDER
-       case s:Print => UNKNOWNGENDER
-       case EmptyStmt => UNKNOWNGENDER
-       case s:IsInvalid => UNKNOWNGENDER
-     }
-   def get_gender (p:Port) : Gender =
-     if (p.direction == Input) MALE else FEMALE
-   def kind (e:Expression) : Kind =
-      e match {
-         case e:WRef => e.kind
-         case e:WSubField => kind(e.exp)
-         case e:WSubIndex => kind(e.exp)
-         case e => ExpKind()
-      }
-   def tpe (e:Expression) : Type =
-      e match {
-         case e:Reference => e.tpe
-         case e:SubField => e.tpe
-         case e:SubIndex => e.tpe
-         case e:SubAccess => e.tpe
-         case e:WRef => e.tpe
-         case e:WSubField => e.tpe
-         case e:WSubIndex => e.tpe
-         case e:WSubAccess => e.tpe
-         case e:DoPrim => e.tpe
-         case e:Mux => e.tpe
-         case e:ValidIf => e.tpe
-         case e:UIntLiteral => UIntType(e.width)
-         case e:SIntLiteral => SIntType(e.width)
-         case e:WVoid => UnknownType
-         case e:WInvalid => UnknownType
-      }
-   def get_type (s:Statement) : Type = {
-      s match {
-       case s:DefWire => s.tpe
-       case s:DefRegister => s.tpe
-       case s:DefNode => tpe(s.value)
-       case s:DefMemory => {
-          val depth = s.depth
-          val addr = Field("addr",Default,UIntType(IntWidth(scala.math.max(ceil_log2(depth), 1))))
-          val en = Field("en",Default,BoolType)
-          val clk = Field("clk",Default,ClockType)
-          val def_data = Field("data",Default,s.dataType)
-          val rev_data = Field("data",Flip,s.dataType)
-          val mask = Field("mask",Default,create_mask(s.dataType))
-          val wmode = Field("wmode",Default,UIntType(IntWidth(1)))
-          val rdata = Field("rdata",Flip,s.dataType)
-          val wdata = Field("wdata",Default,s.dataType)
-          val wmask = Field("wmask",Default,create_mask(s.dataType))
-          val read_type = BundleType(Seq(rev_data,addr,en,clk))
-          val write_type = BundleType(Seq(def_data,mask,addr,en,clk))
-          val readwrite_type = BundleType(Seq(wmode,rdata,wdata,wmask,addr,en,clk))
+   def gender (e:Expression) : Gender = e match {
+     case e:WRef => e.gender
+     case e:WSubField => e.gender
+     case e:WSubIndex => e.gender
+     case e:WSubAccess => e.gender
+     case e:DoPrim => MALE
+     case e:UIntLiteral => MALE
+     case e:SIntLiteral => MALE
+     case e:Mux => MALE
+     case e:ValidIf => MALE
+     case e:WInvalid => MALE
+     case e => println(e); error("Shouldn't be here")
+   }
+   def get_gender (s:Statement) : Gender = s match {
+     case s:DefWire => BIGENDER
+     case s:DefRegister => BIGENDER
+     case s:WDefInstance => MALE
+     case s:DefNode => MALE
+     case s:DefInstance => MALE
+     case s:DefMemory => MALE
+     case s:Block => UNKNOWNGENDER
+     case s:Connect => UNKNOWNGENDER
+     case s:PartialConnect => UNKNOWNGENDER
+     case s:Stop => UNKNOWNGENDER
+     case s:Print => UNKNOWNGENDER
+     case EmptyStmt => UNKNOWNGENDER
+     case s:IsInvalid => UNKNOWNGENDER
+   }
+   def get_gender (p:Port) : Gender = if (p.direction == Input) MALE else FEMALE
+   def kind (e:Expression) : Kind = e match {
+     case e:WRef => e.kind
+     case e:WSubField => kind(e.exp)
+     case e:WSubIndex => kind(e.exp)
+     case e => ExpKind()
+   }
+   def tpe (e:Expression) : Type = e match {
+     case e:Reference => e.tpe
+     case e:SubField => e.tpe
+     case e:SubIndex => e.tpe
+     case e:SubAccess => e.tpe
+     case e:WRef => e.tpe
+     case e:WSubField => e.tpe
+     case e:WSubIndex => e.tpe
+     case e:WSubAccess => e.tpe
+     case e:DoPrim => e.tpe
+     case e:Mux => e.tpe
+     case e:ValidIf => e.tpe
+     case e:UIntLiteral => UIntType(e.width)
+     case e:SIntLiteral => SIntType(e.width)
+     case e:WVoid => UnknownType
+     case e:WInvalid => UnknownType
+   }
+   def get_type (s:Statement) : Type = s match {
+     case s:DefWire => s.tpe
+     case s:DefRegister => s.tpe
+     case s:DefNode => tpe(s.value)
+     case s:DefMemory => {
+        val depth = s.depth
+        val addr = Field("addr",Default,UIntType(IntWidth(scala.math.max(ceil_log2(depth), 1))))
+        val en = Field("en",Default,BoolType)
+        val clk = Field("clk",Default,ClockType)
+        val def_data = Field("data",Default,s.dataType)
+        val rev_data = Field("data",Flip,s.dataType)
+        val mask = Field("mask",Default,create_mask(s.dataType))
+        val wmode = Field("wmode",Default,UIntType(IntWidth(1)))
+        val rdata = Field("rdata",Flip,s.dataType)
+        val wdata = Field("wdata",Default,s.dataType)
+        val wmask = Field("wmask",Default,create_mask(s.dataType))
+        val read_type = BundleType(Seq(rev_data,addr,en,clk))
+        val write_type = BundleType(Seq(def_data,mask,addr,en,clk))
+        val readwrite_type = BundleType(Seq(wmode,rdata,wdata,wmask,addr,en,clk))
 
-          val mem_fields = ArrayBuffer[Field]()
-          s.readers.foreach {x => mem_fields += Field(x,Flip,read_type)}
-          s.writers.foreach {x => mem_fields += Field(x,Flip,write_type)}
-          s.readwriters.foreach {x => mem_fields += Field(x,Flip,readwrite_type)}
-          BundleType(mem_fields)
-       }
-       case s:DefInstance => UnknownType
-       case s:WDefInstance => s.tpe
-       case _ => UnknownType
-    }}
-   def get_name (s:Statement) : String = {
-      s match {
-       case s:DefWire => s.name
-       case s:DefRegister => s.name
-       case s:DefNode => s.name
-       case s:DefMemory => s.name
-       case s:DefInstance => s.name
-       case s:WDefInstance => s.name
-       case _ => error("Shouldn't be here"); "blah"
-    }}
-   def get_info (s:Statement) : Info = {
-      s match {
-       case s:DefWire => s.info
-       case s:DefRegister => s.info
-       case s:DefInstance => s.info
-       case s:WDefInstance => s.info
-       case s:DefMemory => s.info
-       case s:DefNode => s.info
-       case s:Conditionally => s.info
-       case s:PartialConnect => s.info
-       case s:Connect => s.info
-       case s:IsInvalid => s.info
-       case s:Stop => s.info
-       case s:Print => s.info
-       case _ => NoInfo
-    }}
+        val mem_fields = ArrayBuffer[Field]()
+        s.readers.foreach {x => mem_fields += Field(x,Flip,read_type)}
+        s.writers.foreach {x => mem_fields += Field(x,Flip,write_type)}
+        s.readwriters.foreach {x => mem_fields += Field(x,Flip,readwrite_type)}
+        BundleType(mem_fields)
+     }
+     case s:DefInstance => UnknownType
+     case s:WDefInstance => s.tpe
+     case _ => UnknownType
+   }
+   def get_name (s:Statement) : String = s match {
+     case s:DefWire => s.name
+     case s:DefRegister => s.name
+     case s:DefNode => s.name
+     case s:DefMemory => s.name
+     case s:DefInstance => s.name
+     case s:WDefInstance => s.name
+     case _ => error("Shouldn't be here")
+   }
+   def get_info (s:Statement) : Info = s match {
+     case s:DefWire => s.info
+     case s:DefRegister => s.info
+     case s:DefInstance => s.info
+     case s:WDefInstance => s.info
+     case s:DefMemory => s.info
+     case s:DefNode => s.info
+     case s:Conditionally => s.info
+     case s:PartialConnect => s.info
+     case s:Connect => s.info
+     case s:IsInvalid => s.info
+     case s:Stop => s.info
+     case s:Print => s.info
+     case _ => NoInfo
+   }
 
   /** Splits an Expression into root Ref and tail
     *
@@ -684,7 +614,7 @@ object Utils extends LazyLogging {
             }
         }
         rootDecl
-      case e => throw new FIRRTLException(s"getDeclaration does not support Expressions of type ${e.getClass}")
+      case e => error(s"getDeclaration does not support Expressions of type ${e.getClass}")
     }
   }
 
@@ -752,44 +682,38 @@ object Utils extends LazyLogging {
    //   sym-hash
    implicit class StmtUtils(stmt: Statement) {
 
-     def getType(): Type =
-       stmt match {
-         case s: DefWire    => s.tpe
-         case s: DefRegister => s.tpe
-         case s: DefMemory  => s.dataType
-         case _ => UnknownType
-       }
+     def getType(): Type = stmt match {
+       case s: DefWire => s.tpe
+       case s: DefRegister => s.tpe
+       case s: DefMemory => s.dataType
+       case _ => UnknownType
+     }
 
-     def getInfo: Info =
-       stmt match {
-         case s: DefWire => s.info
-         case s: DefRegister => s.info
-         case s: DefInstance => s.info
-         case s: DefMemory => s.info
-         case s: DefNode => s.info
-         case s: Conditionally => s.info
-         case s: PartialConnect => s.info
-         case s: Connect => s.info
-         case s: IsInvalid => s.info
-         case s: Stop => s.info
-         case s: Print => s.info
-         case _ => NoInfo
-       }
+     def getInfo: Info = stmt match {
+       case s: DefWire => s.info
+       case s: DefRegister => s.info
+       case s: DefInstance => s.info
+       case s: DefMemory => s.info
+       case s: DefNode => s.info
+       case s: Conditionally => s.info
+       case s: PartialConnect => s.info
+       case s: Connect => s.info
+       case s: IsInvalid => s.info
+       case s: Stop => s.info
+       case s: Print => s.info
+       case _ => NoInfo
+     }
    }
 
    implicit class FlipUtils(f: Orientation) {
-     def flip(): Orientation = {
-       f match {
-         case Flip => Default
-         case Default => Flip
-       }
+     def flip(): Orientation = f match {
+       case Flip => Default
+       case Default => Flip
      }
          
-     def toDirection(): Direction = {
-       f match {
-         case Default => Output
-         case Flip => Input
-       }
+     def toDirection(): Direction = f match {
+       case Default => Output
+       case Flip => Input
      }
    }
 
@@ -808,26 +732,22 @@ object Utils extends LazyLogging {
      }
      def isAggregate: Boolean = !t.isGround
 
-     def getType(): Type = 
-       t match {
-         case v: VectorType => v.tpe
-         case tpe: Type => UnknownType
-       }
+     def getType(): Type = t match {
+       case v: VectorType => v.tpe
+       case tpe: Type => UnknownType
+     }
 
-     def wipeWidth(): Type = 
-       t match {
-         case t: UIntType => UIntType(UnknownWidth)
-         case t: SIntType => SIntType(UnknownWidth)
-         case _ => t
-       }
+     def wipeWidth(): Type = t match {
+       case t: UIntType => UIntType(UnknownWidth)
+       case t: SIntType => SIntType(UnknownWidth)
+       case _ => t
+     }
    }
 
    implicit class DirectionUtils(d: Direction) {
-     def toFlip(): Orientation = {
-       d match {
-         case Input => Flip
-         case Output => Default
-       }
+     def toFlip(): Orientation = d match {
+       case Input => Flip
+       case Output => Default
      }
    }
   
