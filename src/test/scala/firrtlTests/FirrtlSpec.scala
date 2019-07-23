@@ -7,19 +7,18 @@ import java.security.Permission
 
 import com.typesafe.scalalogging.LazyLogging
 
-import scala.sys.process._
 import org.scalatest._
 import org.scalatest.prop._
 
-import scala.io.Source
 import firrtl._
 import firrtl.ir._
-import firrtl.Parser.{IgnoreInfo, UseInfo}
-import firrtl.analyses.{GetNamespace, InstanceGraph, ModuleNamespaceAnnotation}
+import firrtl.Parser.UseInfo
+import firrtl.analyses.{GetNamespace, ModuleNamespaceAnnotation}
 import firrtl.annotations._
 import firrtl.transforms.{DontTouchAnnotation, NoDedupAnnotation, RenameModules}
 import firrtl.util.BackendCompilationUtilities
-import scala.collection.mutable
+
+import scala.util.Try
 
 class CheckLowForm extends SeqTransform {
   def inputForm = LowForm
@@ -155,10 +154,13 @@ trait FirrtlRunners extends BackendCompilationUtilities {
 
 trait FirrtlMatchers extends Matchers {
   def dontTouch(path: String): Annotation = {
-    val parts = path.split('.')
-    require(parts.size >= 2, "Must specify both module and component!")
-    val name = ComponentName(parts.tail.mkString("."), ModuleName(parts.head, CircuitName("Top")))
-    DontTouchAnnotation(name)
+    // Try Target before falling back on Named
+    val target = Try(Target.deserialize(path).asInstanceOf[ReferenceTarget]).getOrElse {
+      val parts = path.split('.')
+      require(parts.size >= 2, "Must specify both module and component!")
+      ComponentName(parts.tail.mkString("."), ModuleName(parts.head, CircuitName("Top"))).toTarget
+    }
+    DontTouchAnnotation(target)
   }
   def dontDedup(mod: String): Annotation = {
     require(mod.split('.').size == 1, "Can only specify a Module, not a component or instance")
