@@ -317,7 +317,7 @@ class DedupModuleTests extends HighTransformSpec {
     execute(input, check, Seq.empty)
   }
 
-  "The module A and A_" should "not be deduped with different annotation targets" in {
+  "The module A and A_" should "dedup and disambiguate different annotation targets" in {
     val input =
       """circuit Top :
         |  module Top :
@@ -336,17 +336,16 @@ class DedupModuleTests extends HighTransformSpec {
       """circuit Top :
         |  module Top :
         |    inst a1 of A
-        |    inst a2 of A_
+        |    inst a2 of A
         |  module A :
         |    output x: UInt<1>
         |    wire b: UInt<1>
         |    x <= b
-        |  module A_ :
-        |    output x: UInt<1>
-        |    wire b: UInt<1>
-        |    x <= b
       """.stripMargin
-    execute(input, check, Seq(dontTouch("A.b")))
+    val result = execute(input, check, Seq(dontTouch("A.b")))
+    val target = CircuitTarget("Top").module("Top").instOf("a1", "A").ref("b")
+    val annotations = result.annotations.toList
+    annotations should contain (dontTouch("~Top|Top/a1:A>x"))
   }
 
   "The module A and A_" should "be deduped with same annotation targets" in {
