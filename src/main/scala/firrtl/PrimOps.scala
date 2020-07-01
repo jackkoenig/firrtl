@@ -9,7 +9,7 @@ import firrtl.constraint._
 
 /** Definitions and Utility functions for [[ir.PrimOp]]s */
 object PrimOps extends LazyLogging {
-  def t1(e: DoPrim): Type = e.args.head.tpe
+  def t1(e: DoPrim): Type = e.args.head
   def t2(e: DoPrim): Type = e.args(1).tpe
   def t3(e: DoPrim): Type = e.args(2).tpe
   def w1(e: DoPrim): Width = getWidth(t1(e))
